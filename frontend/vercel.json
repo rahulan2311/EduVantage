@@ -1,0 +1,9 @@
+{
+  "name": "eduvantage-lms",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
