@@ -9,34 +9,52 @@ import { supabase } from "./supabaseClient";
 export const api = {
   // --- USER AUTHENTICATION ---
   login: async (email, password) => {
+    // 1. Authenticate with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (authError || !authData.user) {
+      throw new Error("Invalid credentials or user not found");
+    }
+
+    // 2. Fetch the full profile from our public users table
     const { data, error } = await supabase
       .from("users")
       .select("*")
       .ilike("email", email)
-      .eq("password", password)
       .single();
 
     if (error || !data) {
-      throw new Error("Invalid credentials or user not found");
+      throw new Error("User profile not found");
     }
+    
     const { password: _, ...userWithoutPassword } = data;
+    // Map id from our auth table so we use the real UUID
+    userWithoutPassword.id = authData.user.id;
     return userWithoutPassword;
   },
 
   register: async (name, email, password, phone, role) => {
-    // Check if email exists
-    const { data: existingUser } = await supabase
-      .from("users")
-      .select("id")
-      .ilike("email", email)
-      .maybeSingle();
+    // 1. Register the user in Supabase Auth so they show up in the Dashboard
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { name, phone, role }
+      }
+    });
 
-    if (existingUser) {
-      throw new Error("Email already registered");
+    if (authError) {
+      throw new Error(authError.message);
     }
 
+    // Use the real Supabase Auth UUID if available, otherwise generate one
+    const newUserId = authData.user ? authData.user.id : `user-${Date.now()}`;
+
     const newUser = {
-      id: `user-${Date.now()}`,
+      id: newUserId,
       name,
       email,
       password,
@@ -45,13 +63,25 @@ export const api = {
       avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`
     };
 
+    // 2. Insert into our public users table for the app to function properly
     const { data, error } = await supabase
       .from("users")
       .insert([newUser])
       .select()
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) {
+       // If they already exist in our public table, just fetch them
+       if (error.code === '23505') { // unique violation
+          const { data: existing } = await supabase.from("users").select("*").ilike("email", email).single();
+          if (existing) {
+             const { password: _, ...userWithoutPassword } = existing;
+             userWithoutPassword.id = newUserId;
+             return userWithoutPassword;
+          }
+       }
+       throw new Error(error.message);
+    }
 
     const { password: _, ...userWithoutPassword } = data;
     return userWithoutPassword;
